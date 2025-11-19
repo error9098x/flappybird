@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { Peer, DataConnection } from 'peerjs';
+import { Peer } from 'peerjs';
+import type { DataConnection } from 'peerjs';
 import { GameEngine } from './components/GameEngine';
 import { Overlay } from './components/Overlay';
 import { GameState, NetMessage, OpponentBird } from './types';
