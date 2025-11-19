@@ -83,21 +83,27 @@ const App: React.FC = () => {
     };
 
     // --- ROBUST MONITORING ---
-    // Monitor the low-level ICE state. If ICE connects but PeerJS 'open' event misses, we force it.
+    // Monitor the low-level ICE state and raw DataChannel state.
     const monitorInterval = setInterval(() => {
         if (!conn.peerConnection) return;
         
         const iceState = conn.peerConnection.iceConnectionState;
-        console.log(`[Connection Monitor] ICE: ${iceState}, Open: ${conn.open}`);
-
+        
         if (iceState === 'connected' || iceState === 'completed') {
-            // The network path is open. 
-            // If React state says not connected, we wait a split second and force it.
-            if (!conn.open) {
-                 console.log('[Connection Monitor] ICE Connected but DataChannel closed. waiting...');
-            } else {
-                 // Data channel says open, ensure UI reflects it
-                 handleOpen();
+            // The network path is open.
+            
+            // Check if PeerJS thinks it's open
+            if (conn.open) {
+                handleOpen();
+            } 
+            // Fallback: Check the raw WebRTC DataChannel state
+            // This fixes issues where PeerJS state lags behind the actual channel
+            else if (conn.dataChannel && conn.dataChannel.readyState === 'open') {
+                console.log('[Connection Monitor] Raw DataChannel is OPEN. Forcing state update.');
+                handleOpen();
+            }
+            else {
+                 console.log(`[Connection Monitor] ICE Connected. Waiting for DataChannel... (DC State: ${conn.dataChannel?.readyState})`);
             }
         }
         
@@ -110,7 +116,7 @@ const App: React.FC = () => {
                  handleQuit();
             }
         }
-    }, 1000);
+    }, 500); // Check more frequently (500ms)
 
     conn.on('close', () => clearInterval(monitorInterval));
     conn.on('error', () => clearInterval(monitorInterval));
