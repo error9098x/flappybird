@@ -19,6 +19,7 @@ interface OverlayProps {
   onCreateGame?: () => void;
   onJoinGame?: (code: string) => void;
   onQuit?: () => void;
+  statusLog?: string[];
 }
 
 export const Overlay: React.FC<OverlayProps> = ({
@@ -34,11 +35,26 @@ export const Overlay: React.FC<OverlayProps> = ({
   isConnected,
   onCreateGame,
   onJoinGame,
-  onQuit
+  onQuit,
+  statusLog
 }) => {
   const [joinCode, setJoinCode] = useState('');
 
   if (gameState === GameState.PLAYING) return null;
+
+  const renderDebugLog = () => (
+     statusLog && statusLog.length > 0 && (
+        <div className="mt-4 w-full max-w-xs bg-black/80 rounded p-2 pointer-events-auto">
+            <div className="text-[10px] font-mono text-green-400 h-16 overflow-y-auto flex flex-col-reverse">
+                {statusLog.slice().reverse().map((log, i) => (
+                    <div key={i} className="truncate">
+                       <span className="opacity-50">[{i}]</span> {log}
+                    </div>
+                ))}
+            </div>
+        </div>
+     )
+  );
 
   const renderStartScreen = () => (
     <div className="flex flex-col items-center animate-bounce-slow w-full px-4 pointer-events-auto">
@@ -117,6 +133,7 @@ export const Overlay: React.FC<OverlayProps> = ({
                         Cancel Room
                     </button>
                 )}
+                {renderDebugLog()}
             </div>
         )}
         
@@ -128,6 +145,7 @@ export const Overlay: React.FC<OverlayProps> = ({
                 <button onClick={onQuit} className="text-red-500 font-bold hover:underline pointer-events-auto px-4 py-2 hover:bg-red-50 rounded">
                     Cancel
                 </button>
+                {renderDebugLog()}
             </div>
         )}
         
@@ -145,6 +163,7 @@ export const Overlay: React.FC<OverlayProps> = ({
                 <button onClick={onQuit} className="text-red-500 font-bold hover:underline pointer-events-auto px-4 py-2 hover:bg-red-50 rounded">
                     Leave Room
                 </button>
+                {renderDebugLog()}
             </div>
         )}
     </div>

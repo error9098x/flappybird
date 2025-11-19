@@ -20,10 +20,9 @@ const PEER_CONFIG: PeerOptions = {
   debug: 2, // Log warnings and errors
   config: {
     iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
-      { urls: 'stun:stun2.l.google.com:19302' },
-      { urls: 'stun:stun3.l.google.com:19302' },
-      { urls: 'stun:stun4.l.google.com:19302' }
+      { urls: 'stun:stun2.l.google.com:19302' }
     ]
   }
 };
@@ -43,11 +42,23 @@ const App: React.FC = () => {
   const [opponentScore, setOpponentScore] = useState(0);
   const [isConnected, setIsConnected] = useState(false);
   
+  // Debug Logging
+  const [statusLog, setStatusLog] = useState<string[]>([]);
+  
   // Refs for networking to avoid re-renders
   const peerRef = useRef<Peer | null>(null);
   const connRef = useRef<DataConnection | null>(null);
   const opponentBirdRef = useRef<OpponentBird>({ y: 300, velocity: 0, rotation: 0, isAlive: true, score: 0 });
   const gameSeedRef = useRef<number>(Date.now());
+
+  const addLog = useCallback((msg: string) => {
+      console.log(`[App] ${msg}`);
+      setStatusLog(prev => {
+          const newLogs = [...prev, msg];
+          if (newLogs.length > 6) return newLogs.slice(newLogs.length - 6);
+          return newLogs;
+      });
+  }, []);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -68,9 +79,10 @@ const App: React.FC = () => {
   
   const setupConnection = (conn: DataConnection) => {
     connRef.current = conn;
+    addLog(`Setup conn: ${conn.peer.substring(0,5)}...`);
     
     const handleOpen = () => {
-      console.log('State: Connection OPENED');
+      addLog('State: Connection OPENED');
       // Only update state if we aren't already connected (prevent dupes)
       setIsConnected((prev) => {
         if (prev) return prev;
@@ -88,27 +100,30 @@ const App: React.FC = () => {
         if (!conn.peerConnection) return;
         
         const iceState = conn.peerConnection.iceConnectionState;
+        const dcState = conn.dataChannel?.readyState;
+        
+        // Only log interesting state changes or if we are waiting
+        if (iceState !== 'connected' || !isConnected) {
+             // addLog(`ICE: ${iceState} | DC: ${dcState}`);
+        }
         
         if (iceState === 'connected' || iceState === 'completed') {
             // The network path is open.
             
             // Check if PeerJS thinks it's open
             if (conn.open) {
-                handleOpen();
+                if (!isConnected) handleOpen();
             } 
             // Fallback: Check the raw WebRTC DataChannel state
             // This fixes issues where PeerJS state lags behind the actual channel
-            else if (conn.dataChannel && conn.dataChannel.readyState === 'open') {
-                console.log('[Connection Monitor] Raw DataChannel is OPEN. Forcing state update.');
+            else if (dcState === 'open') {
+                addLog('Raw DC OPEN. Forcing state.');
                 handleOpen();
-            }
-            else {
-                 console.log(`[Connection Monitor] ICE Connected. Waiting for DataChannel... (DC State: ${conn.dataChannel?.readyState})`);
             }
         }
         
         if (iceState === 'failed' || iceState === 'disconnected' || iceState === 'closed') {
-            console.warn('[Connection Monitor] Connection died');
+            addLog('Connection died (ICE failed)');
             clearInterval(monitorInterval);
             setIsConnected(false);
             if (gameState !== GameState.START && gameState !== GameState.LOBBY) {
@@ -116,14 +131,20 @@ const App: React.FC = () => {
                  handleQuit();
             }
         }
-    }, 500); // Check more frequently (500ms)
+    }, 800);
 
-    conn.on('close', () => clearInterval(monitorInterval));
-    conn.on('error', () => clearInterval(monitorInterval));
+    conn.on('close', () => {
+        addLog('Conn closed event');
+        clearInterval(monitorInterval);
+    });
+    conn.on('error', (err) => {
+        addLog(`Conn error: ${err.type}`);
+        clearInterval(monitorInterval);
+    });
 
     // CRITICAL FIX: Check if connection is ALREADY open (Race Condition Fix)
     if (conn.open) {
-      console.log('State: Connection was ALREADY OPEN');
+      addLog('Conn already OPEN');
       handleOpen();
     } else {
       conn.on('open', handleOpen);
@@ -133,7 +154,7 @@ const App: React.FC = () => {
       const msg = data as NetMessage;
       
       if (msg.type === 'START') {
-        console.log('Received START command');
+        addLog('RX: START');
         gameSeedRef.current = msg.seed;
         setGameState(GameState.PLAYING);
         setScore(0);
@@ -175,6 +196,7 @@ const App: React.FC = () => {
     setIsHost(true);
     setIsConnected(false);
     setGameState(GameState.WAITING);
+    setStatusLog(['Initializing Host...']);
 
     try {
         // Pass config with STUN servers
@@ -183,16 +205,18 @@ const App: React.FC = () => {
         window.peer = peer; // Prevent GC
 
         peer.on('open', (id) => {
-          console.log('Host ID ready:', id);
+          addLog(`Host ID: ${id}`);
         });
 
         peer.on('connection', (conn) => {
-          console.log('Incoming connection from guest...');
+          addLog('Guest connecting...');
+          // The guest initiates connection with serialization: 'json', so we don't need to set it here.
+          // Moreover, it is readonly on the incoming connection object.
           setupConnection(conn);
         });
         
         peer.on('error', (err) => {
-            console.error('Peer Error:', err);
+            addLog(`Error: ${err.type}`);
             if (err.type === 'unavailable-id') {
                 alert("Room code collision. Please try again.");
             } else {
@@ -212,6 +236,7 @@ const App: React.FC = () => {
     setIsHost(false);
     setIsConnected(false);
     setGameState(GameState.JOINING);
+    setStatusLog(['Initializing Guest...']);
     
     try {
         const peer = new Peer(undefined, PEER_CONFIG); 
@@ -219,8 +244,8 @@ const App: React.FC = () => {
         window.peer = peer; // Prevent GC
 
         peer.on('open', (id) => {
-          console.log('Guest ID ready:', id);
-          console.log('Connecting to:', PEER_PREFIX + code.toUpperCase());
+          addLog(`My ID: ${id}`);
+          addLog(`Connecting to: ${code}`);
           
           const conn = peer.connect(PEER_PREFIX + code.toUpperCase(), {
               reliable: true,
@@ -230,10 +255,10 @@ const App: React.FC = () => {
           // Set a longer safety timeout
           const connectionTimeout = setTimeout(() => {
              if (!conn.open) {
-                 console.warn('Connection timed out (15s)');
+                 addLog('Timeout (15s)');
                  // Last ditch check: is ICE connected?
                  if (conn.peerConnection && (conn.peerConnection.iceConnectionState === 'connected' || conn.peerConnection.iceConnectionState === 'completed')) {
-                      console.log('Timeout hit, but ICE is connected. Assuming open.');
+                      addLog('Timeout but ICE connected. Forcing open.');
                       // Don't quit, let the monitor handle it or user cancel
                  } else {
                       alert('Connection timed out. Host might be unreachable.');
@@ -251,6 +276,7 @@ const App: React.FC = () => {
         });
 
         peer.on('error', (err) => {
+            addLog(`Error: ${err.type}`);
             console.error('Peer Error:', err);
             alert("Could not connect to room. Check the code or try again.");
             handleQuit();
@@ -274,6 +300,7 @@ const App: React.FC = () => {
     setIsConnected(false);
     setGameState(GameState.START);
     setRoomCode('');
+    setStatusLog([]);
   }, []);
 
   // --- Game Logic Handlers ---
@@ -399,6 +426,7 @@ const App: React.FC = () => {
             onJoinGame={handleJoinGame}
             onQuit={handleQuit}
             isConnected={isConnected}
+            statusLog={statusLog}
           />
         </div>
       </div>
