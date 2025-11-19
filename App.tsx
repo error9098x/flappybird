@@ -1,12 +1,22 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Peer } from 'peerjs';
-import type { DataConnection } from 'peerjs';
+import type { DataConnection, PeerOptions } from 'peerjs';
 import { GameEngine } from './components/GameEngine';
 import { Overlay } from './components/Overlay';
 import { GameState, NetMessage, OpponentBird } from './types';
 
 const PEER_PREFIX = 'flappy-flight-v1-';
+
+// Critical: Use Google's public STUN servers to allow connections across different networks
+const PEER_CONFIG: PeerOptions = {
+  config: {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:global.stun.twilio.com:3478' }
+    ]
+  }
+};
 
 const App: React.FC = () => {
   const [gameState, setGameState] = useState<GameState>(GameState.START);
@@ -48,11 +58,22 @@ const App: React.FC = () => {
   const setupConnection = (conn: DataConnection) => {
     connRef.current = conn;
     
-    conn.on('open', () => {
-      console.log('Connection opened!');
+    const handleOpen = () => {
+      console.log('State: Connection OPENED');
       setIsConnected(true);
-      setGameState(GameState.WAITING); 
-    });
+      
+      // If we are the Guest, we enter WAITING state upon connection.
+      // If we are Host, we stay in WAITING state until we click Start.
+      setGameState(GameState.WAITING);
+    };
+
+    // CRITICAL FIX: Check if connection is ALREADY open (Race Condition Fix)
+    if (conn.open) {
+      console.log('State: Connection was ALREADY OPEN');
+      handleOpen();
+    }
+
+    conn.on('open', handleOpen);
 
     conn.on('data', (data: unknown) => {
       const msg = data as NetMessage;
@@ -78,15 +99,15 @@ const App: React.FC = () => {
         setOpponentScore(msg.score);
       }
       else if (msg.type === 'RESTART') {
-        // If we receive a restart while waiting/gameover, we wait for START
-        // This is just a signal that opponent clicked restart
+        // Just a signal, actual restart logic handles state
       }
     });
 
     conn.on('close', () => {
       console.warn('Peer connection closed');
       setIsConnected(false);
-      if (gameState !== GameState.GAME_OVER && gameState !== GameState.START) {
+      // Only alert if we were in a game context
+      if (gameState !== GameState.START && gameState !== GameState.LOBBY) {
           alert('Opponent disconnected');
           handleQuit();
       }
@@ -99,7 +120,6 @@ const App: React.FC = () => {
   };
 
   const handleCreateGame = () => {
-    // Generate a 5-character code for slightly better collision avoidance
     const code = Math.random().toString(36).substring(2, 7).toUpperCase();
     setRoomCode(code);
     setIsMultiplayer(true);
@@ -108,7 +128,8 @@ const App: React.FC = () => {
     setGameState(GameState.WAITING);
 
     try {
-        const peer = new Peer(PEER_PREFIX + code);
+        // Pass config with STUN servers
+        const peer = new Peer(PEER_PREFIX + code, PEER_CONFIG);
         peerRef.current = peer;
 
         peer.on('open', (id) => {
@@ -143,15 +164,32 @@ const App: React.FC = () => {
     setGameState(GameState.JOINING);
     
     try {
-        const peer = new Peer(); // Auto-gen ID for guest
+        const peer = new Peer(undefined, PEER_CONFIG); 
         peerRef.current = peer;
 
         peer.on('open', (id) => {
           console.log('Guest ID ready:', id);
           console.log('Connecting to:', PEER_PREFIX + code.toUpperCase());
+          
           const conn = peer.connect(PEER_PREFIX + code.toUpperCase(), {
-              reliable: true
+              reliable: true,
+              serialization: 'json' // Force JSON to avoid browser compatibility issues
           });
+          
+          // Set a safety timeout in case connection hangs
+          const connectionTimeout = setTimeout(() => {
+             if (!conn.open) {
+                 console.warn('Connection timed out');
+                 alert('Connection timed out. Host might be unreachable.');
+                 handleQuit();
+             }
+          }, 10000);
+
+          // Clear timeout if it opens
+          conn.on('open', () => clearTimeout(connectionTimeout));
+          conn.on('error', () => clearTimeout(connectionTimeout));
+          conn.on('close', () => clearTimeout(connectionTimeout));
+
           setupConnection(conn);
         });
 
