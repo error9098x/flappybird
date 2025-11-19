@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Flappy Flight React</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Fredoka', sans-serif;
+            overscroll-behavior: none;
+        }
+        /* Prevent selection during rapid tapping */
+        canvas {
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+        }
+    </style>
+<script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "peerjs": "https://esm.sh/peerjs@1.5.4?bundle-deps"
+  }
+}
+</script>
+</head>
+<body class="bg-slate-900 text-white overflow-hidden select-none">
+    <div id="root"></div>
+</body>
+</html>

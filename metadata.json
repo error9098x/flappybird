@@ -1,0 +1,5 @@
+{
+  "name": "Flappy Flight React",
+  "description": "A high-quality, polished Flappy Bird clone built with React, TypeScript, and Canvas API, featuring smooth physics and responsive design.",
+  "requestFramePermissions": []
+}
