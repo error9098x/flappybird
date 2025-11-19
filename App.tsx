@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Peer } from 'peerjs';
 import type { DataConnection } from 'peerjs';
@@ -20,6 +21,7 @@ const App: React.FC = () => {
   const [isMultiplayer, setIsMultiplayer] = useState(false);
   const [isHost, setIsHost] = useState(false);
   const [opponentScore, setOpponentScore] = useState(0);
+  const [isConnected, setIsConnected] = useState(false);
   
   // Refs for networking to avoid re-renders
   const peerRef = useRef<Peer | null>(null);
@@ -29,8 +31,15 @@ const App: React.FC = () => {
 
   // Cleanup on unmount
   useEffect(() => {
-    return () => {
+    const cleanup = () => {
+      connRef.current?.close();
       peerRef.current?.destroy();
+    };
+
+    window.addEventListener('beforeunload', cleanup);
+    return () => {
+      window.removeEventListener('beforeunload', cleanup);
+      cleanup();
     };
   }, []);
 
@@ -40,17 +49,16 @@ const App: React.FC = () => {
     connRef.current = conn;
     
     conn.on('open', () => {
-      console.log('Connected to peer!');
-      setGameState(GameState.WAITING); // Host waits for guest, guest waits for start
-      
-      // If we are guest, we are technically ready, but we wait for Host to send START
-      // If we are Host, we show a "Start Game" button in Overlay
+      console.log('Connection opened!');
+      setIsConnected(true);
+      setGameState(GameState.WAITING); 
     });
 
     conn.on('data', (data: unknown) => {
       const msg = data as NetMessage;
       
       if (msg.type === 'START') {
+        console.log('Received START command');
         gameSeedRef.current = msg.seed;
         setGameState(GameState.PLAYING);
         setScore(0);
@@ -58,100 +66,125 @@ const App: React.FC = () => {
         opponentBirdRef.current = { ...opponentBirdRef.current, isAlive: true, score: 0 };
       }
       else if (msg.type === 'UPDATE') {
-        // Smooth interpolation could happen here, but for now direct update
         opponentBirdRef.current.y = msg.y;
         opponentBirdRef.current.rotation = msg.r;
         opponentBirdRef.current.score = msg.s;
         opponentBirdRef.current.isAlive = true;
-        setOpponentScore(msg.s); // Triggers re-render for score display only if changed
+        setOpponentScore(msg.s);
       }
       else if (msg.type === 'DIE') {
         opponentBirdRef.current.isAlive = false;
         opponentBirdRef.current.score = msg.score;
         setOpponentScore(msg.score);
-        // If I am already dead, and opponent dies, we can show final results?
-        // Current logic: local game over happens independently. 
       }
       else if (msg.type === 'RESTART') {
-        // Host requested restart
-        if (!isHost) {
-           // wait for START message with new seed
-        }
+        // If we receive a restart while waiting/gameover, we wait for START
+        // This is just a signal that opponent clicked restart
       }
     });
 
     conn.on('close', () => {
-      alert('Connection lost');
-      handleQuit();
+      console.warn('Peer connection closed');
+      setIsConnected(false);
+      if (gameState !== GameState.GAME_OVER && gameState !== GameState.START) {
+          alert('Opponent disconnected');
+          handleQuit();
+      }
     });
     
-    conn.on('error', () => {
-      alert('Connection error');
-      handleQuit();
+    conn.on('error', (err) => {
+      console.error('Connection Error:', err);
+      setIsConnected(false);
     });
   };
 
   const handleCreateGame = () => {
-    const code = Math.random().toString(36).substring(2, 6).toUpperCase();
+    // Generate a 5-character code for slightly better collision avoidance
+    const code = Math.random().toString(36).substring(2, 7).toUpperCase();
     setRoomCode(code);
     setIsMultiplayer(true);
     setIsHost(true);
+    setIsConnected(false);
     setGameState(GameState.WAITING);
 
-    const peer = new Peer(PEER_PREFIX + code);
-    peerRef.current = peer;
+    try {
+        const peer = new Peer(PEER_PREFIX + code);
+        peerRef.current = peer;
 
-    peer.on('open', (id) => {
-      console.log('My peer ID is: ' + id);
-    });
+        peer.on('open', (id) => {
+          console.log('Host ID ready:', id);
+        });
 
-    peer.on('connection', (conn) => {
-      setupConnection(conn);
-      // PeerJS doesn't trigger 'open' on the incoming connection immediately sometimes,
-      // but usually it does.
-    });
-    
-    peer.on('error', (err) => {
-        console.error(err);
-        alert("Could not create room (maybe ID taken?). Try again.");
+        peer.on('connection', (conn) => {
+          console.log('Incoming connection from guest...');
+          setupConnection(conn);
+        });
+        
+        peer.on('error', (err) => {
+            console.error('Peer Error:', err);
+            if (err.type === 'unavailable-id') {
+                alert("Room code collision. Please try again.");
+            } else {
+                alert("Connection error: " + err.type);
+            }
+            handleQuit();
+        });
+    } catch (e) {
+        console.error("Failed to create peer", e);
         handleQuit();
-    });
+    }
   };
 
   const handleJoinGame = (code: string) => {
+    if (!code) return;
     setIsMultiplayer(true);
     setIsHost(false);
+    setIsConnected(false);
     setGameState(GameState.JOINING);
     
-    const peer = new Peer(); // Auto-gen ID for guest
-    peerRef.current = peer;
+    try {
+        const peer = new Peer(); // Auto-gen ID for guest
+        peerRef.current = peer;
 
-    peer.on('open', () => {
-      const conn = peer.connect(PEER_PREFIX + code.toUpperCase());
-      setupConnection(conn);
-    });
+        peer.on('open', (id) => {
+          console.log('Guest ID ready:', id);
+          console.log('Connecting to:', PEER_PREFIX + code.toUpperCase());
+          const conn = peer.connect(PEER_PREFIX + code.toUpperCase(), {
+              reliable: true
+          });
+          setupConnection(conn);
+        });
 
-    peer.on('error', (err) => {
-        console.error(err);
-        alert("Could not connect. Check code.");
+        peer.on('error', (err) => {
+            console.error('Peer Error:', err);
+            alert("Could not connect to room. Check the code or try again.");
+            handleQuit();
+        });
+    } catch (e) {
+        console.error("Failed to join peer", e);
         handleQuit();
-    });
+    }
   };
 
   const handleQuit = useCallback(() => {
+    connRef.current?.close();
     peerRef.current?.destroy();
+    
     peerRef.current = null;
     connRef.current = null;
+    
     setIsMultiplayer(false);
     setIsHost(false);
+    setIsConnected(false);
     setGameState(GameState.START);
+    setRoomCode('');
   }, []);
 
   // --- Game Logic Handlers ---
 
   const handleStart = useCallback(() => {
     if (isMultiplayer) {
-      if (isHost && connRef.current) {
+      if (isHost && connRef.current && isConnected) {
         const seed = Date.now();
         gameSeedRef.current = seed;
         connRef.current.send({ type: 'START', seed });
@@ -164,7 +197,7 @@ const App: React.FC = () => {
       setGameState(GameState.PLAYING);
       setScore(0);
     }
-  }, [isMultiplayer, isHost]);
+  }, [isMultiplayer, isHost, isConnected]);
 
   const handleGameOver = useCallback((finalScore: number) => {
     setGameState(GameState.GAME_OVER);
@@ -174,10 +207,10 @@ const App: React.FC = () => {
       localStorage.setItem('flappyHighScore', finalScore.toString());
     }
 
-    if (isMultiplayer && connRef.current) {
+    if (isMultiplayer && connRef.current && isConnected) {
       connRef.current.send({ type: 'DIE', score: finalScore });
     }
-  }, [highScore, isMultiplayer]);
+  }, [highScore, isMultiplayer, isConnected]);
 
   const handleScoreUpdate = useCallback((newScore: number) => {
     setScore(newScore);
@@ -185,10 +218,10 @@ const App: React.FC = () => {
 
   // Called by GameEngine every frame to sync multiplayer data
   const handleNetworkUpdate = useCallback((y: number, rot: number, s: number) => {
-    if (isMultiplayer && connRef.current && connRef.current.open) {
+    if (isMultiplayer && connRef.current && isConnected) {
       connRef.current.send({ type: 'UPDATE', y, r: rot, s });
     }
-  }, [isMultiplayer]);
+  }, [isMultiplayer, isConnected]);
 
   const handleRestart = useCallback(() => {
     if (isMultiplayer) {
@@ -197,13 +230,15 @@ const App: React.FC = () => {
             handleStart();
         } else {
             // Guest waits
-            // Show "Waiting for host"
+             if (connRef.current && isConnected) {
+                connRef.current.send({ type: 'RESTART' });
+             }
         }
     } else {
         setGameState(GameState.START);
         setScore(0);
     }
-  }, [isMultiplayer, isHost, handleStart]);
+  }, [isMultiplayer, isHost, handleStart, isConnected]);
 
   return (
     <div className="relative w-full h-screen bg-slate-900 flex justify-center items-center overflow-hidden">
@@ -224,15 +259,15 @@ const App: React.FC = () => {
           {gameState === GameState.PLAYING && (
             <div className="absolute top-10 w-full flex flex-col items-center pointer-events-none z-10">
                <div className="flex gap-8">
-                  <div className="text-center">
-                     <span className="text-sm font-bold text-white drop-shadow-md block">YOU</span>
+                  <div className="text-center transform transition-transform duration-100">
+                     <span className="text-xs font-bold text-white drop-shadow-md block bg-black/30 rounded px-2 py-0.5 mb-1">YOU</span>
                      <span className="text-6xl font-bold text-white drop-shadow-[0_4px_4px_rgba(0,0,0,0.5)] stroke-black">
                        {score}
                      </span>
                   </div>
                   {isMultiplayer && (
-                     <div className="text-center opacity-80">
-                        <span className="text-sm font-bold text-red-200 drop-shadow-md block">P2</span>
+                     <div className="text-center opacity-90 transform transition-transform duration-100">
+                        <span className="text-xs font-bold text-red-100 drop-shadow-md block bg-red-900/30 rounded px-2 py-0.5 mb-1">P2</span>
                         <span className="text-6xl font-bold text-red-100 drop-shadow-[0_4px_4px_rgba(0,0,0,0.5)] stroke-black">
                           {opponentScore}
                         </span>
@@ -257,7 +292,7 @@ const App: React.FC = () => {
             onCreateGame={handleCreateGame}
             onJoinGame={handleJoinGame}
             onQuit={handleQuit}
-            isConnected={!!connRef.current?.open}
+            isConnected={isConnected}
           />
         </div>
       </div>

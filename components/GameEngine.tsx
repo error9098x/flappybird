@@ -1,3 +1,4 @@
+
 import React, { useRef, useEffect, useCallback } from 'react';
 import { GameState, Bird, Pipe, Cloud, Particle, OpponentBird } from '../types';
 import { SeededRNG } from '../utils';
@@ -54,6 +55,9 @@ export const GameEngine: React.FC<GameEngineProps> = ({
   const framesRef = useRef(0);
   const groundXRef = useRef(0);
   
+  // Interpolation cache for ghost bird
+  const ghostYRef = useRef(CANVAS_HEIGHT / 2);
+  
   // RNG Ref
   const rngRef = useRef<SeededRNG | null>(null);
 
@@ -77,6 +81,7 @@ export const GameEngine: React.FC<GameEngineProps> = ({
     scoreRef.current = 0;
     framesRef.current = 0;
     particlesRef.current = [];
+    ghostYRef.current = CANVAS_HEIGHT / 2;
     
     // Reset RNG with shared seed for multiplayer, or random for single
     const seed = isMultiplayer ? gameSeed : Date.now();
@@ -304,9 +309,14 @@ export const GameEngine: React.FC<GameEngineProps> = ({
       // Draw Opponent Bird (Ghost)
       if (isMultiplayer && opponentBirdRef && opponentBirdRef.current.isAlive) {
         const opp = opponentBirdRef.current;
+        
+        // Smooth interpolation for visual rendering
+        const smoothFactor = 0.2;
+        ghostYRef.current += (opp.y - ghostYRef.current) * smoothFactor;
+        
         ctx.save();
         ctx.globalAlpha = 0.6;
-        ctx.translate(BIRD_X, opp.y);
+        ctx.translate(BIRD_X, ghostYRef.current);
         ctx.rotate(opp.rotation);
         
         // Red/Ghost color for opponent
@@ -381,6 +391,11 @@ export const GameEngine: React.FC<GameEngineProps> = ({
       ctx.stroke();
 
       ctx.restore();
+      
+      // Waiting Text Draw
+      if (isMultiplayer && gameState === GameState.WAITING && !isMultiplayer) { // Logic tweak handled in Overlay, but we can draw text here too
+          // (Text rendered in HTML overlay is better for accessibility)
+      }
 
       frameRef.current = requestAnimationFrame(render);
     };
