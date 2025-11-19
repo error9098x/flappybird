@@ -1,14 +1,14 @@
 export const CANVAS_WIDTH = 400;
 export const CANVAS_HEIGHT = 600;
 
-// Physics
-export const GRAVITY = 0.4; // Increased slightly for snappier feel
-export const JUMP_STRENGTH = -7;
-export const TERMINAL_VELOCITY = 8;
-export const PIPE_SPEED = 3;
-export const PIPE_SPAWN_RATE = 100; // Frames between pipes
+// Physics - Adjusted for slower, easier gameplay
+export const GRAVITY = 0.25; 
+export const JUMP_STRENGTH = -4.5;
+export const TERMINAL_VELOCITY = 6;
+export const PIPE_SPEED = 2; // Slower scroll speed
+export const PIPE_SPAWN_RATE = 150; // Spaced out more due to slower speed
 export const PIPE_WIDTH = 52;
-export const PIPE_GAP = 160; // Generous gap for better playability
+export const PIPE_GAP = 150; 
 
 // Dimensions
 export const BIRD_X = 60;

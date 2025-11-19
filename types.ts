@@ -1,10 +1,12 @@
 export enum GameState {
   START = 'START',
+  COUNTDOWN = 'COUNTDOWN', // 3, 2, 1...
   PLAYING = 'PLAYING',
+  SPECTATING = 'SPECTATING', // Player died, watching opponent
   GAME_OVER = 'GAME_OVER',
-  LOBBY = 'LOBBY',         // Selecting Multiplayer/Singleplayer
-  WAITING = 'WAITING',     // Waiting for peer to connect
-  JOINING = 'JOINING'      // Entering code
+  LOBBY = 'LOBBY',
+  WAITING = 'WAITING',
+  JOINING = 'JOINING'
 }
 
 export interface Bird {

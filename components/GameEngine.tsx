@@ -1,4 +1,3 @@
-
 import React, { useRef, useEffect, useCallback } from 'react';
 import { GameState, Bird, Pipe, Cloud, Particle, OpponentBird } from '../types';
 import { SeededRNG } from '../utils';
@@ -24,6 +23,7 @@ import {
 
 interface GameEngineProps {
   gameState: GameState;
+  countdown?: number;
   onGameOver: (score: number) => void;
   onScoreUpdate: (score: number) => void;
   
@@ -36,6 +36,7 @@ interface GameEngineProps {
 
 export const GameEngine: React.FC<GameEngineProps> = ({
   gameState,
+  countdown = 0,
   onGameOver,
   onScoreUpdate,
   isMultiplayer = false,
@@ -90,12 +91,8 @@ export const GameEngine: React.FC<GameEngineProps> = ({
 
   // Effect to handle GameState changes
   useEffect(() => {
-    if (gameState === GameState.START || gameState === GameState.WAITING) {
+    if (gameState === GameState.START || gameState === GameState.WAITING || (gameState === GameState.COUNTDOWN && framesRef.current === 0)) {
       resetGame();
-    }
-    // If playing started, we rely on the reset having happened
-    if (gameState === GameState.PLAYING && pipesRef.current.length === 0) {
-        resetGame();
     }
   }, [gameState, resetGame]);
 
@@ -127,20 +124,37 @@ export const GameEngine: React.FC<GameEngineProps> = ({
     if (!rngRef.current) rngRef.current = new SeededRNG(Date.now());
 
     const render = () => {
-      // 1. Update Logic
-      if (gameState === GameState.PLAYING) {
+      
+      // Logic: If playing OR spectating, the world moves.
+      const isWorldActive = gameState === GameState.PLAYING || gameState === GameState.SPECTATING;
+
+      if (isWorldActive) {
         framesRef.current++;
         
-        // Update Bird
-        birdRef.current.velocity += GRAVITY;
-        if (birdRef.current.velocity > TERMINAL_VELOCITY) {
-            birdRef.current.velocity = TERMINAL_VELOCITY;
-        }
-        birdRef.current.y += birdRef.current.velocity;
+        // Update Local Bird (only if playing)
+        if (gameState === GameState.PLAYING) {
+            birdRef.current.velocity += GRAVITY;
+            if (birdRef.current.velocity > TERMINAL_VELOCITY) {
+                birdRef.current.velocity = TERMINAL_VELOCITY;
+            }
+            birdRef.current.y += birdRef.current.velocity;
 
-        // Calculate Rotation
-        const targetRotation = Math.min(Math.PI / 2, Math.max(-Math.PI / 4, (birdRef.current.velocity * 0.1)));
-        birdRef.current.rotation += (targetRotation - birdRef.current.rotation) * 0.1;
+            // Calculate Rotation
+            const targetRotation = Math.min(Math.PI / 2, Math.max(-Math.PI / 4, (birdRef.current.velocity * 0.1)));
+            birdRef.current.rotation += (targetRotation - birdRef.current.rotation) * 0.1;
+            
+             // Send Network Update
+            if (isMultiplayer && onNetworkUpdate && framesRef.current % 2 === 0) { // Throttle slightly
+                onNetworkUpdate(birdRef.current.y, birdRef.current.rotation, scoreRef.current);
+            }
+        } else if (gameState === GameState.SPECTATING) {
+            // In spectator mode, bird falls off screen then stops updating
+            if (birdRef.current.y < CANVAS_HEIGHT + 100) {
+                birdRef.current.velocity += GRAVITY;
+                birdRef.current.y += birdRef.current.velocity;
+                birdRef.current.rotation += 0.1;
+            }
+        }
 
         // Ground Movement
         groundXRef.current = (groundXRef.current - PIPE_SPEED) % CANVAS_WIDTH;
@@ -170,39 +184,39 @@ export const GameEngine: React.FC<GameEngineProps> = ({
             continue;
           }
 
-          // Score counting
-          if (!p.passed && p.x + PIPE_WIDTH < BIRD_X - BIRD_RADIUS) {
+          // Score counting (Only if playing)
+          if (gameState === GameState.PLAYING && !p.passed && p.x + PIPE_WIDTH < BIRD_X - BIRD_RADIUS) {
             p.passed = true;
             scoreRef.current += 1;
             onScoreUpdate(scoreRef.current);
           }
 
-          // Collision Detection
-          if (
-            BIRD_X + BIRD_RADIUS - 4 > p.x && 
-            BIRD_X - BIRD_RADIUS + 4 < p.x + PIPE_WIDTH && 
-            (birdRef.current.y - BIRD_RADIUS + 4 < p.topHeight || 
-             birdRef.current.y + BIRD_RADIUS - 4 > p.topHeight + PIPE_GAP)
-          ) {
-            onGameOver(scoreRef.current);
+          // Collision Detection (Only if playing)
+          if (gameState === GameState.PLAYING) {
+              if (
+                BIRD_X + BIRD_RADIUS - 4 > p.x && 
+                BIRD_X - BIRD_RADIUS + 4 < p.x + PIPE_WIDTH && 
+                (birdRef.current.y - BIRD_RADIUS + 4 < p.topHeight || 
+                 birdRef.current.y + BIRD_RADIUS - 4 > p.topHeight + PIPE_GAP)
+              ) {
+                onGameOver(scoreRef.current);
+              }
           }
         }
 
-        // Ground/Ceiling Collision
-        if (birdRef.current.y + BIRD_RADIUS >= CANVAS_HEIGHT - GROUND_HEIGHT) {
-           onGameOver(scoreRef.current);
-        }
-        if (birdRef.current.y - BIRD_RADIUS <= 0) {
-            birdRef.current.y = BIRD_RADIUS;
-            birdRef.current.velocity = 0;
-        }
-
-        // Send Network Update
-        if (isMultiplayer && onNetworkUpdate && framesRef.current % 2 === 0) { // Throttle slightly
-            onNetworkUpdate(birdRef.current.y, birdRef.current.rotation, scoreRef.current);
+        // Ground/Ceiling Collision (Only if playing)
+        if (gameState === GameState.PLAYING) {
+            if (birdRef.current.y + BIRD_RADIUS >= CANVAS_HEIGHT - GROUND_HEIGHT) {
+               onGameOver(scoreRef.current);
+            }
+            if (birdRef.current.y - BIRD_RADIUS <= 0) {
+                birdRef.current.y = BIRD_RADIUS;
+                birdRef.current.velocity = 0;
+            }
         }
 
-      } else if (gameState === GameState.START || gameState === GameState.WAITING) {
+      } else {
+         // START / WAITING / COUNTDOWN
          // Idle animation
          const time = Date.now() / 300;
          birdRef.current.y = (CANVAS_HEIGHT / 2) + Math.sin(time) * 10;
@@ -353,48 +367,45 @@ export const GameEngine: React.FC<GameEngineProps> = ({
           ctx.fill();
       });
 
-      // Draw Player Bird
-      ctx.save();
-      ctx.translate(BIRD_X, birdRef.current.y);
-      ctx.rotate(birdRef.current.rotation);
+      // Draw Player Bird (Draw even if falling in spectate)
+      if (birdRef.current.y < CANVAS_HEIGHT + 50) {
+          ctx.save();
+          ctx.translate(BIRD_X, birdRef.current.y);
+          ctx.rotate(birdRef.current.rotation);
 
-      ctx.fillStyle = COLOR_BIRD;
-      ctx.beginPath();
-      ctx.arc(0, 0, BIRD_RADIUS, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = 'black';
-      ctx.stroke();
+          ctx.fillStyle = COLOR_BIRD;
+          ctx.beginPath();
+          ctx.arc(0, 0, BIRD_RADIUS, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = 'black';
+          ctx.stroke();
 
-      ctx.fillStyle = 'white';
-      ctx.beginPath();
-      ctx.arc(6, -6, 6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.fillStyle = 'black';
-      ctx.beginPath();
-      ctx.arc(8, -6, 2, 0, Math.PI * 2);
-      ctx.fill();
+          ctx.fillStyle = 'white';
+          ctx.beginPath();
+          ctx.arc(6, -6, 6, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = 'black';
+          ctx.beginPath();
+          ctx.arc(8, -6, 2, 0, Math.PI * 2);
+          ctx.fill();
 
-      ctx.fillStyle = '#F8F8FF';
-      ctx.beginPath();
-      ctx.ellipse(-4, 4, 8, 5, 0.2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
+          ctx.fillStyle = '#F8F8FF';
+          ctx.beginPath();
+          ctx.ellipse(-4, 4, 8, 5, 0.2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
 
-      ctx.fillStyle = '#FF6347';
-      ctx.beginPath();
-      ctx.moveTo(8, 2);
-      ctx.lineTo(18, 6);
-      ctx.lineTo(8, 10);
-      ctx.fill();
-      ctx.stroke();
+          ctx.fillStyle = '#FF6347';
+          ctx.beginPath();
+          ctx.moveTo(8, 2);
+          ctx.lineTo(18, 6);
+          ctx.lineTo(8, 10);
+          ctx.fill();
+          ctx.stroke();
 
-      ctx.restore();
-      
-      // Waiting Text Draw
-      if (isMultiplayer && gameState === GameState.WAITING && !isMultiplayer) { // Logic tweak handled in Overlay, but we can draw text here too
-          // (Text rendered in HTML overlay is better for accessibility)
+          ctx.restore();
       }
 
       frameRef.current = requestAnimationFrame(render);

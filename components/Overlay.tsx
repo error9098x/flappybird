@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { GameState } from '../types';
 import { Button } from './Button';
@@ -7,6 +6,7 @@ interface OverlayProps {
   gameState: GameState;
   score: number;
   highScore: number;
+  countdown?: number;
   onStart: () => void;
   onRestart: () => void;
   
@@ -26,6 +26,7 @@ export const Overlay: React.FC<OverlayProps> = ({
   gameState,
   score,
   highScore,
+  countdown = 0,
   onStart,
   onRestart,
   isMultiplayer,
@@ -41,6 +42,7 @@ export const Overlay: React.FC<OverlayProps> = ({
   const [joinCode, setJoinCode] = useState('');
 
   if (gameState === GameState.PLAYING) return null;
+  if (gameState === GameState.SPECTATING) return null;
 
   const renderDebugLog = () => (
      statusLog && statusLog.length > 0 && (
@@ -55,6 +57,19 @@ export const Overlay: React.FC<OverlayProps> = ({
         </div>
      )
   );
+
+  // COUNTDOWN OVERLAY
+  if (gameState === GameState.COUNTDOWN) {
+      return (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-50">
+             <div key={countdown} className="animate-ping-once">
+                 <span className="text-9xl font-black text-white drop-shadow-[0_8px_0_rgba(0,0,0,0.5)] stroke-black stroke-2">
+                     {countdown}
+                 </span>
+             </div>
+        </div>
+      );
+  }
 
   const renderStartScreen = () => (
     <div className="flex flex-col items-center animate-bounce-slow w-full px-4 pointer-events-auto">

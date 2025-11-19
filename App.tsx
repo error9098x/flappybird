@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { Peer } from 'peerjs';
 import type { DataConnection, PeerOptions } from 'peerjs';
@@ -34,6 +33,7 @@ const App: React.FC = () => {
     const saved = localStorage.getItem('flappyHighScore');
     return saved ? parseInt(saved, 10) : 0;
   });
+  const [countdown, setCountdown] = useState(3);
 
   // Multiplayer State
   const [roomCode, setRoomCode] = useState<string>('');
@@ -74,6 +74,18 @@ const App: React.FC = () => {
       cleanup();
     };
   }, []);
+
+  // Countdown Timer
+  useEffect(() => {
+    if (gameState === GameState.COUNTDOWN) {
+      if (countdown > 0) {
+        const timer = setTimeout(() => setCountdown(c => c - 1), 1000);
+        return () => clearTimeout(timer);
+      } else {
+        setGameState(GameState.PLAYING);
+      }
+    }
+  }, [gameState, countdown]);
 
   // --- Network Handlers ---
   
@@ -156,7 +168,9 @@ const App: React.FC = () => {
       if (msg.type === 'START') {
         addLog('RX: START');
         gameSeedRef.current = msg.seed;
-        setGameState(GameState.PLAYING);
+        // Start Countdown on Guest side
+        setCountdown(3);
+        setGameState(GameState.COUNTDOWN);
         setScore(0);
         setOpponentScore(0);
         opponentBirdRef.current = { ...opponentBirdRef.current, isAlive: true, score: 0 };
@@ -172,9 +186,18 @@ const App: React.FC = () => {
         opponentBirdRef.current.isAlive = false;
         opponentBirdRef.current.score = msg.score;
         setOpponentScore(msg.score);
+        
+        // If we are currently spectating (meaning we died first), now both are dead
+        // So we can show the Game Over screen
+        setGameState(current => {
+             if (current === GameState.SPECTATING) {
+                 return GameState.GAME_OVER;
+             }
+             return current;
+        });
       }
       else if (msg.type === 'RESTART') {
-        // Signal received
+        // Signal received, waiting for host logic or handled automatically
       }
     });
 
@@ -312,32 +335,46 @@ const App: React.FC = () => {
         gameSeedRef.current = seed;
         // Send start command
         connRef.current.send({ type: 'START', seed });
-        // Start local
-        setGameState(GameState.PLAYING);
+        
+        // Start local Countdown
+        setCountdown(3);
+        setGameState(GameState.COUNTDOWN);
         setScore(0);
         setOpponentScore(0);
         opponentBirdRef.current.isAlive = true;
       }
     } else {
-      setGameState(GameState.PLAYING);
+      // Single player countdown
+      setCountdown(3);
+      setGameState(GameState.COUNTDOWN);
       setScore(0);
     }
   }, [isMultiplayer, isHost, isConnected]);
 
   const handleGameOver = useCallback((finalScore: number) => {
-    setGameState(GameState.GAME_OVER);
-    
     if (finalScore > highScore) {
       setHighScore(finalScore);
       localStorage.setItem('flappyHighScore', finalScore.toString());
     }
 
+    // Multiplayer Death Logic
     if (isMultiplayer && connRef.current && isConnected) {
       try {
          connRef.current.send({ type: 'DIE', score: finalScore });
       } catch (e) {
          console.error("Failed to send DIE", e);
       }
+
+      // If opponent is still alive, we spectate
+      if (opponentBirdRef.current.isAlive) {
+          setGameState(GameState.SPECTATING);
+      } else {
+          // Both dead
+          setGameState(GameState.GAME_OVER);
+      }
+    } else {
+      // Single Player
+      setGameState(GameState.GAME_OVER);
     }
   }, [highScore, isMultiplayer, isConnected]);
 
@@ -368,7 +405,8 @@ const App: React.FC = () => {
              }
         }
     } else {
-        setGameState(GameState.START);
+        setCountdown(3);
+        setGameState(GameState.COUNTDOWN);
         setScore(0);
     }
   }, [isMultiplayer, isHost, handleStart, isConnected]);
@@ -379,6 +417,7 @@ const App: React.FC = () => {
         
         <GameEngine 
           gameState={gameState}
+          countdown={countdown}
           onGameOver={handleGameOver}
           onScoreUpdate={handleScoreUpdate}
           isMultiplayer={isMultiplayer}
@@ -389,17 +428,17 @@ const App: React.FC = () => {
 
         {/* UI Layer */}
         <div className="absolute inset-0 pointer-events-none">
-          {gameState === GameState.PLAYING && (
+          {(gameState === GameState.PLAYING || gameState === GameState.SPECTATING) && (
             <div className="absolute top-10 w-full flex flex-col items-center pointer-events-none z-10">
                <div className="flex gap-8">
-                  <div className="text-center transform transition-transform duration-100">
+                  <div className={`text-center transform transition-all duration-300 ${gameState === GameState.SPECTATING ? 'opacity-50 scale-75' : 'scale-100'}`}>
                      <span className="text-xs font-bold text-white drop-shadow-md block bg-black/30 rounded px-2 py-0.5 mb-1">YOU</span>
                      <span className="text-6xl font-bold text-white drop-shadow-[0_4px_4px_rgba(0,0,0,0.5)] stroke-black">
                        {score}
                      </span>
                   </div>
                   {isMultiplayer && (
-                     <div className="text-center opacity-90 transform transition-transform duration-100">
+                     <div className={`text-center transform transition-all duration-300 ${gameState === GameState.SPECTATING ? 'opacity-100 scale-110' : 'opacity-90 scale-100'}`}>
                         <span className="text-xs font-bold text-red-100 drop-shadow-md block bg-red-900/30 rounded px-2 py-0.5 mb-1">P2</span>
                         <span className="text-6xl font-bold text-red-100 drop-shadow-[0_4px_4px_rgba(0,0,0,0.5)] stroke-black">
                           {opponentScore}
@@ -407,6 +446,11 @@ const App: React.FC = () => {
                      </div>
                   )}
                </div>
+               {gameState === GameState.SPECTATING && (
+                   <div className="mt-2 bg-red-500/80 text-white font-bold px-4 py-1 rounded-full animate-pulse shadow-lg">
+                       SPECTATING OPPONENT
+                   </div>
+               )}
             </div>
           )}
 
@@ -414,6 +458,7 @@ const App: React.FC = () => {
             gameState={gameState}
             score={score}
             highScore={highScore}
+            countdown={countdown}
             onStart={handleStart}
             onRestart={handleRestart}
             
