@@ -8,12 +8,22 @@ import { GameState, NetMessage, OpponentBird } from './types';
 
 const PEER_PREFIX = 'flappy-flight-v1-';
 
+// Declare global to prevent GC and for debugging
+declare global {
+  interface Window {
+    peer: Peer | null;
+  }
+}
+
 // Critical: Use Google's public STUN servers to allow connections across different networks
 const PEER_CONFIG: PeerOptions = {
+  debug: 2, // Log warnings and errors
   config: {
     iceServers: [
-      { urls: 'stun:stun.l.google.com:19302' },
-      { urls: 'stun:global.stun.twilio.com:3478' }
+      { urls: 'stun:stun1.l.google.com:19302' },
+      { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun3.l.google.com:19302' },
+      { urls: 'stun:stun4.l.google.com:19302' }
     ]
   }
 };
@@ -44,6 +54,7 @@ const App: React.FC = () => {
     const cleanup = () => {
       connRef.current?.close();
       peerRef.current?.destroy();
+      window.peer = null;
     };
 
     window.addEventListener('beforeunload', cleanup);
@@ -60,20 +71,57 @@ const App: React.FC = () => {
     
     const handleOpen = () => {
       console.log('State: Connection OPENED');
-      setIsConnected(true);
-      
-      // If we are the Guest, we enter WAITING state upon connection.
-      // If we are Host, we stay in WAITING state until we click Start.
-      setGameState(GameState.WAITING);
+      // Only update state if we aren't already connected (prevent dupes)
+      setIsConnected((prev) => {
+        if (prev) return prev;
+        
+        // If we are the Guest, we enter WAITING state upon connection.
+        // If we are Host, we stay in WAITING state until we click Start.
+        setGameState(GameState.WAITING);
+        return true;
+      });
     };
+
+    // --- ROBUST MONITORING ---
+    // Monitor the low-level ICE state. If ICE connects but PeerJS 'open' event misses, we force it.
+    const monitorInterval = setInterval(() => {
+        if (!conn.peerConnection) return;
+        
+        const iceState = conn.peerConnection.iceConnectionState;
+        console.log(`[Connection Monitor] ICE: ${iceState}, Open: ${conn.open}`);
+
+        if (iceState === 'connected' || iceState === 'completed') {
+            // The network path is open. 
+            // If React state says not connected, we wait a split second and force it.
+            if (!conn.open) {
+                 console.log('[Connection Monitor] ICE Connected but DataChannel closed. waiting...');
+            } else {
+                 // Data channel says open, ensure UI reflects it
+                 handleOpen();
+            }
+        }
+        
+        if (iceState === 'failed' || iceState === 'disconnected' || iceState === 'closed') {
+            console.warn('[Connection Monitor] Connection died');
+            clearInterval(monitorInterval);
+            setIsConnected(false);
+            if (gameState !== GameState.START && gameState !== GameState.LOBBY) {
+                 alert('Connection lost');
+                 handleQuit();
+            }
+        }
+    }, 1000);
+
+    conn.on('close', () => clearInterval(monitorInterval));
+    conn.on('error', () => clearInterval(monitorInterval));
 
     // CRITICAL FIX: Check if connection is ALREADY open (Race Condition Fix)
     if (conn.open) {
       console.log('State: Connection was ALREADY OPEN');
       handleOpen();
+    } else {
+      conn.on('open', handleOpen);
     }
-
-    conn.on('open', handleOpen);
 
     conn.on('data', (data: unknown) => {
       const msg = data as NetMessage;
@@ -99,18 +147,13 @@ const App: React.FC = () => {
         setOpponentScore(msg.score);
       }
       else if (msg.type === 'RESTART') {
-        // Just a signal, actual restart logic handles state
+        // Signal received
       }
     });
 
     conn.on('close', () => {
       console.warn('Peer connection closed');
       setIsConnected(false);
-      // Only alert if we were in a game context
-      if (gameState !== GameState.START && gameState !== GameState.LOBBY) {
-          alert('Opponent disconnected');
-          handleQuit();
-      }
     });
     
     conn.on('error', (err) => {
@@ -131,6 +174,7 @@ const App: React.FC = () => {
         // Pass config with STUN servers
         const peer = new Peer(PEER_PREFIX + code, PEER_CONFIG);
         peerRef.current = peer;
+        window.peer = peer; // Prevent GC
 
         peer.on('open', (id) => {
           console.log('Host ID ready:', id);
@@ -166,6 +210,7 @@ const App: React.FC = () => {
     try {
         const peer = new Peer(undefined, PEER_CONFIG); 
         peerRef.current = peer;
+        window.peer = peer; // Prevent GC
 
         peer.on('open', (id) => {
           console.log('Guest ID ready:', id);
@@ -176,14 +221,20 @@ const App: React.FC = () => {
               serialization: 'json' // Force JSON to avoid browser compatibility issues
           });
           
-          // Set a safety timeout in case connection hangs
+          // Set a longer safety timeout
           const connectionTimeout = setTimeout(() => {
              if (!conn.open) {
-                 console.warn('Connection timed out');
-                 alert('Connection timed out. Host might be unreachable.');
-                 handleQuit();
+                 console.warn('Connection timed out (15s)');
+                 // Last ditch check: is ICE connected?
+                 if (conn.peerConnection && (conn.peerConnection.iceConnectionState === 'connected' || conn.peerConnection.iceConnectionState === 'completed')) {
+                      console.log('Timeout hit, but ICE is connected. Assuming open.');
+                      // Don't quit, let the monitor handle it or user cancel
+                 } else {
+                      alert('Connection timed out. Host might be unreachable.');
+                      handleQuit();
+                 }
              }
-          }, 10000);
+          }, 15000);
 
           // Clear timeout if it opens
           conn.on('open', () => clearTimeout(connectionTimeout));
@@ -210,6 +261,7 @@ const App: React.FC = () => {
     
     peerRef.current = null;
     connRef.current = null;
+    window.peer = null;
     
     setIsMultiplayer(false);
     setIsHost(false);
@@ -225,7 +277,9 @@ const App: React.FC = () => {
       if (isHost && connRef.current && isConnected) {
         const seed = Date.now();
         gameSeedRef.current = seed;
+        // Send start command
         connRef.current.send({ type: 'START', seed });
+        // Start local
         setGameState(GameState.PLAYING);
         setScore(0);
         setOpponentScore(0);
@@ -246,7 +300,11 @@ const App: React.FC = () => {
     }
 
     if (isMultiplayer && connRef.current && isConnected) {
-      connRef.current.send({ type: 'DIE', score: finalScore });
+      try {
+         connRef.current.send({ type: 'DIE', score: finalScore });
+      } catch (e) {
+         console.error("Failed to send DIE", e);
+      }
     }
   }, [highScore, isMultiplayer, isConnected]);
 
@@ -257,7 +315,11 @@ const App: React.FC = () => {
   // Called by GameEngine every frame to sync multiplayer data
   const handleNetworkUpdate = useCallback((y: number, rot: number, s: number) => {
     if (isMultiplayer && connRef.current && isConnected) {
-      connRef.current.send({ type: 'UPDATE', y, r: rot, s });
+       try {
+          connRef.current.send({ type: 'UPDATE', y, r: rot, s });
+       } catch (e) {
+          // silently fail on update errors to avoid lag
+       }
     }
   }, [isMultiplayer, isConnected]);
 
